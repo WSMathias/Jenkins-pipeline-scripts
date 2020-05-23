@@ -1,0 +1,80 @@
+def built_img = ""
+// Image tag is a combination of the branch, build number and commit id(develop-v123-701a323)
+def image_tag = ""
+
+def notifySlack(String buildStatus = 'STARTED') {
+    // Build status of null means success.
+    buildStatus = buildStatus ?: 'SUCCESS'
+    def color
+    if (buildStatus == 'STARTED') {
+        color = '#D4DADF'
+    } else if (buildStatus == 'SUCCESS') {
+        color = '#BDFFC3'
+    } else if (buildStatus == 'UNSTABLE') {
+        color = '#FFFE89'
+    } else {
+        color = '#FF9FA1'
+    }
+    def msg = "${buildStatus}: `${env.JOB_NAME}` #${env.BUILD_NUMBER}:\n${env.BUILD_URL}"
+    slackSend(color: color, message: msg)
+}
+
+pipeline {
+    agent any
+    parameters {
+            string(name: 'sourceCodeRepo', defaultValue: 'git@github.com/WSMathias/jenkins-pipeline-scripts.git', description: 'Git repo of source code to be built')
+            string(name: 'buildBranch', defaultValue: "develop", description: 'Default Branch/Tag to checkout')
+            string(name: 'gitRepoCredentials', defaultValue: 'git-creds', description: 'Git Credentials Id present in Jenkins')
+            string(name: 'imageRegistry', defaultValue: 'docker.io', description: 'Image registry Host')
+            string(name: 'imageRepository', defaultValue: 'wsmathias9/test', description: 'Image Repository Name (namespace/image_name)')
+            string(name: 'imageTag', defaultValue: 'v', description: 'Image tag prefix')
+        }
+    triggers {
+        GenericTrigger(
+            genericVariables: [
+                [key: 'ref', value: '$.ref'],
+                [key: 'changed_files', value: '$.commits[*].[\'modified\',\'added\',\'removed\'][*]'],
+                [key: 'commit_msg', value: '$.head_commit[\'message\']']
+            ],
+            causeString: 'Triggering build for files $changed_files on $ref',
+            token: 'token-string',
+            printContributedVariables: false,
+            printPostContent: false,
+            regexpFilterText: '$ref',
+            regexpFilterExpression: 'refs/heads/develop'
+		)
+    }
+    options { disableConcurrentBuilds() }
+
+    stages {
+        stage('First Stage') {
+            steps {
+                notifySlack("STARTED")
+                echo "testing...."
+                script{
+					withCredentials([
+						usernameColonPassword(
+							credentialsId: params.gitRepoCredentials,
+							variable: 'userpass')
+						]){
+
+						branchToClone = (params.buildBranch == "prd") ? "master": params.buildBranch
+						sh ('git clone --depth 2 https://' + userpass + params.sourceCodeRepo.split("@")[1] + ' -b '+ branchToClone + ' .' )
+						echo "Pre Build - Pull the Source code."
+						def commitIdWithNewLine = sh (returnStdout: true, script: 'git rev-parse --short HEAD')
+						commitId = commitIdWithNewLine.trim()
+
+					}
+				}
+            }
+        }
+
+    }
+
+    post { 
+        always { 
+            cleanWs()
+            notifySlack(currentBuild.result)
+        }
+    }
+}
